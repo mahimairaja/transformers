@@ -202,17 +202,20 @@ class RepetitionPenaltyLogitsProcessor(LogitsProcessor):
     Examples:
 
     ```
-
     >>> from transformers import AutoTokenizer, AutoModelForCausalLM
     
+    >>> # Initializing the model and tokenizer for it 
     >>> model = AutoModelForCausalLM.from_pretrained("gpt2")
+    >>> # add_prefix_space - Adds an initial space to the input. This allows to treat the leading word just as any other word (Not important for this demonstration)
     >>> tokenizer = AutoTokenizer.from_pretrained("gpt2", add_prefix_space = True)
     >>> inputs = tokenizer(["I'm not going to"], return_tensors="pt")
 
+    >>> # This shows a normal generate without any specific parameters 
     >>> summary_ids = model.generate(inputs["input_ids"], max_length=20)
     >>> print(tokenizer.batch_decode(summary_ids, skip_special_tokens=True)[0])
     I'm not going to lie, I'm not going to lie. I'm not going to lie
 
+    >>> # This generates given a penalty for repeted tokens
     >>> penalized_ids = model.generate(inputs["input_ids"], max_length=20, repetition_penalty=1.2)
     >>> print(tokenizer.batch_decode(biased_ids, skip_special_tokens=True)[0])
     I'm not going to lie, I was really excited about this. It's a great game
