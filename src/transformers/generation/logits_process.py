@@ -187,7 +187,7 @@ class RepetitionPenaltyLogitsProcessor(LogitsProcessor):
     r"""
     [`LogitsProcessor`] prevents the repetition of previous tokens through an exponential penalty. 
     This technique invloves adjusting the scores assigned to previously generated tokens, discouraging repetition. 
-    This technique shares some similarities with with coverage mechanisms and other aimed at reducing repetition. 
+    This technique shares some similarities with coverage mechanisms and other aimed at reducing repetition. 
     During the text generation process, the probability distribution for the next token is determined using a formula that incorporates 
     token scores based on their occurrence in the generated sequence. Tokens with higher scores are less likely to be selected. 
     The formula takes into account a fair bunch of variables which can be further seen in the [paper](https://arxiv.org/pdf/1909.05858.pdf).
