@@ -1010,6 +1010,7 @@ class MptForQuestionAnswering(MptPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
 class SharedEmbedding(torch.nn.Embedding):
     def forward(self, input: torch.Tensor, unembed: bool=False) -> torch.Tensor:
         if unembed:
@@ -1038,13 +1039,12 @@ class LlavaMptForCausalLM(MptPreTrainedModel):
 
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Initialize weights and apply final processing
-        self.mm_projector = nn.Linear(config.mm_hidden_size, config.hidden_size)
 
         self.post_init()
     
     def embed_tokens(self, x):
-        return SharedEmbedding(self.config.vocab_size, self.config.d_model)
-
+        dummy =  nn.Embedding(self.config.vocab_size, self.config.hidden_size).to("cuda")
+        return dummy.forward(x)
 
     def prepare_inputs_labels_for_multimodal(self, input_ids, attention_mask, past_key_values, labels, preprocessed_images):
         CONTROLLER_HEART_BEAT_EXPIRATION = 30
@@ -1071,18 +1071,17 @@ class LlavaMptForCausalLM(MptPreTrainedModel):
         new_input_embeds = []
         new_labels = [] if labels is not None else None
         cur_image_idx = 0
+        mm_projector = nn.Linear(self.config.mm_hidden_size, self.config.hidden_size)
 
         for batch_idx, cur_input_ids in enumerate(input_ids):
             if (cur_input_ids == IMAGE_TOKEN_INDEX).sum() == 0:
                 cur_input_embeds = self.embed_tokens(cur_input_ids)
-                dummy_feature = torch.zeros(1, self.config.hidden_size, device="cuda", dtype=torch.float16)
-
-                cur_input_embeds = cur_input_embeds + (0. * self.mm_projector(dummy_feature)).sum()
+                dummy_feature = torch.zeros(1, self.config.mm_hidden_size, device="cpu", dtype=torch.float32)
+                cur_input_embeds = cur_input_embeds + (0. * mm_projector(dummy_feature)).sum()
                 new_input_embeds.append(cur_input_embeds)
                 if labels is not None:
                     new_labels.append(labels[batch_idx])
                 cur_image_idx += 1
-                continue
             
             image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0]
             cur_new_input_embeds = []
@@ -1138,12 +1137,44 @@ class LlavaMptForCausalLM(MptPreTrainedModel):
             cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
             new_input_embeds.append(cur_new_input_embeds)
             
-            if labels is not None:
-                cur_new_labels = torch.cat(cur_new_labels, dim=0)
-                new_labels.append(cur_new_labels)
-        
-        # Rest of the code for padding and returning processed data
+        if any(x.shape != new_input_embeds[0].shape for x in new_input_embeds):
+            max_len = max(x.shape[0] for x in new_input_embeds)
 
+            new_input_embeds_align = []
+            for cur_new_embed in new_input_embeds:
+                cur_new_embed = torch.cat((cur_new_embed, torch.zeros((max_len - cur_new_embed.shape[0], cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device)), dim=0)
+                new_input_embeds_align.append(cur_new_embed)
+            new_input_embeds = torch.stack(new_input_embeds_align, dim=0)
+
+            if labels is not None:
+                new_labels_align = []
+                _new_labels = new_labels
+                for cur_new_label in new_labels:
+                    cur_new_label = torch.cat((cur_new_label, torch.full((max_len - cur_new_label.shape[0],), IGNORE_INDEX, dtype=cur_new_label.dtype, device=cur_new_label.device)), dim=0)
+                    new_labels_align.append(cur_new_label)
+                new_labels = torch.stack(new_labels_align, dim=0)
+
+            if attention_mask is not None:
+                new_attention_mask = []
+                for cur_attention_mask, cur_new_labels, cur_new_labels_align in zip(attention_mask, _new_labels, new_labels):
+                    new_attn_mask_pad_left = torch.full((cur_new_labels.shape[0] - labels.shape[1],), True, dtype=attention_mask.dtype, device=attention_mask.device)
+                    new_attn_mask_pad_right = torch.full((cur_new_labels_align.shape[0] - cur_new_labels.shape[0],), False, dtype=attention_mask.dtype, device=attention_mask.device)
+                    cur_new_attention_mask = torch.cat((new_attn_mask_pad_left, cur_attention_mask, new_attn_mask_pad_right), dim=0)
+                    new_attention_mask.append(cur_new_attention_mask)
+                attention_mask = torch.stack(new_attention_mask, dim=0)
+                assert attention_mask.shape == new_labels.shape
+        else:
+            new_input_embeds = torch.stack(new_input_embeds, dim=0)
+            if labels is not None:
+                new_labels  = torch.stack(new_labels, dim=0)
+
+            #if attention_mask is not None:
+            #    new_attn_mask_pad_left = torch.full((attention_mask.shape[0], new_input_embeds.shape[1] - input_ids.shape[1]), True, dtype=attention_mask.dtype, device=attention_mask.device)
+            #    attention_mask = torch.cat((new_attn_mask_pad_left, attention_mask), dim=1)
+            #    assert attention_mask.shape == new_input_embeds.shape[:2]
+            
+        # Rest of the code for padding and returning processed data
+        print("out!!!!! YAYAYA")
         return None, attention_mask, past_key_values, new_input_embeds, new_labels
 
     def get_output_embeddings(self):
@@ -1212,6 +1243,10 @@ class LlavaMptForCausalLM(MptPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, pixel_values)
+        inputs_embeds = inputs_embeds.reshape(1,inputs_embeds.shape[0],inputs_embeds.shape[1]).to(dtype = torch.float32)
+
+        print(inputs_embeds)
+        attention_mask = None
 
         transformer_outputs = self.transformer(
             input_ids,
@@ -1281,5 +1316,6 @@ class LlavaMptForCausalLM(MptPreTrainedModel):
             for layer_past in past
         )
         return reordered_past
+
 
 
