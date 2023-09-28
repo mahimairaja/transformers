@@ -20,6 +20,7 @@ import numpy as np
 import os
 import re
 import cv2
+import imageio
 
 from ...image_processing_utils import BaseImageProcessor, BatchFeature
 from ...utils import (
@@ -70,41 +71,36 @@ class ProPainterImageProcessor(BaseImageProcessor):
         do_resize: bool = True,
         size: Optional[Dict[str, int]] = {"height": -1, "width": -1},
         mask_dilation: int = 4,
-        ref_stride: int = 10,
-        neighbor_length: int = 10,
-        subvideo_length: int = 80,
-        raft_iter: int = 20,
+        save_frames: bool = False,
+        save_path: str = 'results',
         save_fps: int = 24,
-        do_normalize: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self.video = video,
-        self.mask = mask,
-        self.mode = mode,
-        self.scale_h = scale_h,
-        self.scale_w = scale_w,
+        self.video = video
+        self.mask = mask
+        self.mode = mode
+        self.scale_h = scale_h
+        self.scale_w = scale_w
         self.resize_ratio = resize_ratio
         self.do_resize = do_resize
         self.size = size
         self.mask_dilation = mask_dilation
-        self.ref_stride = ref_stride
-        self.neighbor_length = neighbor_length
-        self.subvideo_length = subvideo_length
-        self.raft_iter = raft_iter
+        self.save_frames = save_frames
+        self.save_path = save_path
         self.save_fps = save_fps
-        self.do_normalize = do_normalize
 
 
     def to_tensors(self) -> torch.Tensor:
         return transforms.Compose([Stack(), ToTorchFormatTensor()])
 
-    def get_device(self, 
+    def get_device(
+        self,
         gpu_id : str = None
     ) -> torch.device:
         """
         TODO
-        """ 
+        """
         IS_HIGH_VERSION = [int(m) for m in list(re.findall(r"^([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9][a-zA-Z0-9]*)?(\+git.*)?$",\
             torch.__version__)[0][:3])] >= [1, 12, 0]
 
@@ -120,13 +116,14 @@ class ProPainterImageProcessor(BaseImageProcessor):
                 return torch.device('mps'+gpu_str)
         return torch.device('cuda'+gpu_str if torch.cuda.is_available() and torch.backends.cudnn.is_available() else 'cpu')
 
-    def resize_frames(self,
+    def resize_frames(
+        self,
         frames,
         size=None
     ) -> Tuple[List[Image.Image], Tuple[int, int], Tuple[int, int]]:
         """
         TODO
-        """ 
+        """
         if size is not None:
             out_size = size
             process_size = (out_size[0]-out_size[0]%8, out_size[1]-out_size[1]%8)
@@ -140,12 +137,13 @@ class ProPainterImageProcessor(BaseImageProcessor):
         return frames, process_size, out_size
 
 
-    def read_frame_from_videos(self,
-        frame_root : str 
+    def read_frame_from_videos(
+        self,
+        frame_root : str
     ) -> Tuple[List[Image.Image], Optional[float], Tuple[int, int], str]:
         """
         TODO
-        """ 
+        """
         if frame_root.endswith(('mp4', 'mov', 'avi', 'MP4', 'MOV', 'AVI')): # input video path
             video_name = os.path.basename(frame_root)[:-4]
             vframes, aframes, info = torchvision.io.read_video(filename=frame_root, pts_unit='sec') # RGB
@@ -164,18 +162,19 @@ class ProPainterImageProcessor(BaseImageProcessor):
         size = frames[0].size
 
         return frames, fps, size, video_name
-    
-    def binary_mask(self,
+
+    def binary_mask(
+        self,
         mask: np.ndarray,
         th: float = 0.1
     ) -> np.ndarray:
         """
         TODO
-        """ 
+        """
         mask[mask>th] = 1
         mask[mask<=th] = 0
         return mask
-    
+
     def read_mask(
         self,
         mpath,
@@ -186,14 +185,14 @@ class ProPainterImageProcessor(BaseImageProcessor):
     ) -> Tuple[List[Image.Image], List[Image.Image]]:
         """
         TODO
-        """ 
+        """
         masks_img = []
         masks_dilated = []
         flow_masks = []
 
         if mpath.endswith(('jpg', 'jpeg', 'png', 'JPG', 'JPEG', 'PNG')): # input single img path
             masks_img = [Image.open(mpath)]
-        else:  
+        else:
             mnames = sorted(os.listdir(mpath))
             for mp in mnames:
                 masks_img.append(Image.open(os.path.join(mpath, mp)))
@@ -225,7 +224,8 @@ class ProPainterImageProcessor(BaseImageProcessor):
 
         return flow_masks, masks_dilated
 
-    def extrapolation(self,
+    def extrapolation(
+        self,
         video_ori,
         scale : Tuple
     ) -> Tuple[List[Image.Image], List[Image.Image], List[Image.Image], Tuple[int, int]]:
@@ -252,12 +252,12 @@ class ProPainterImageProcessor(BaseImageProcessor):
         # Generates the mask for missing region.
         masks_dilated = []
         flow_masks = []
-        
+
         dilate_h = 4 if H_start > 10 else 0
         dilate_w = 4 if W_start > 10 else 0
         mask = np.ones(((imgH_extr, imgW_extr)), dtype=np.uint8)
 
-        mask[H_start+dilate_h: H_start+imgH-dilate_h, 
+        mask[H_start+dilate_h: H_start+imgH-dilate_h,
             W_start+dilate_w: W_start+imgW-dilate_w] = 0
         flow_masks.append(Image.fromarray(mask * 255))
 
@@ -266,14 +266,14 @@ class ProPainterImageProcessor(BaseImageProcessor):
 
         flow_masks = flow_masks * nFrame
         masks_dilated = masks_dilated * nFrame
-        
+
         return frames, flow_masks, masks_dilated, (imgW_extr, imgH_extr)
 
     def preprocess(
         self,
         return_tensors: Optional[Union[str, TensorType]] = None,
         **kwargs,
-    ) -> BatchFeature: 
+    ) -> BatchFeature:
         """
         Preprocess an image or batch of images.
 
@@ -303,7 +303,7 @@ class ProPainterImageProcessor(BaseImageProcessor):
         else:
             raise NotImplementedError
 
-        frames = self.to_tensors()(frames).unsqueeze(0) * 2 - 1 
+        frames = self.to_tensors()(frames).unsqueeze(0) * 2 - 1
         flow_masks = self.to_tensors()(flow_masks).unsqueeze(0)
         masks_dilated = self.to_tensors()(masks_dilated).unsqueeze(0)
         frames, flow_masks, masks_dilated = frames.to(device), flow_masks.to(device), masks_dilated.to(device)
@@ -311,6 +311,89 @@ class ProPainterImageProcessor(BaseImageProcessor):
         data = {"frames": frames, "flow_masks": flow_masks, "distil_masks": masks_dilated}
         return BatchFeature(data=data, tensor_type=return_tensors)
 
+    def save_videos_frame(
+        self,
+        save_root : str,
+        masked_frame_for_save,
+        comp_frames,
+    ) -> None:
+        """
+        Save the frames of the video.
+
+        Args:
+            TODO
+
+        """
+        imageio.mimwrite(os.path.join(save_root, 'masked_in.mp4'), masked_frame_for_save, fps=self.save_fps, quality=7)
+        imageio.mimwrite(os.path.join(save_root, 'inpaint_out.mp4'), comp_frames, fps=self.save_fps, quality=7)
+        return None
+
+    def imwrite(
+        self,
+        img,
+        file_path,
+        params=None,
+        auto_mkdir=True
+    ) -> bool:
+        if auto_mkdir:
+            dir_name = os.path.abspath(os.path.dirname(file_path))
+            os.makedirs(dir_name, exist_ok=True)
+
+        return cv2.imwrite(file_path, img, params)
+
+
+    def save_frame(
+        self,
+        comp_frames,
+        video_length,
+        out_size,
+        save_root : str,
+    ) -> None:
+        for idx in range(video_length):
+            f = comp_frames[idx]
+            f = cv2.resize(f, out_size, interpolation = cv2.INTER_CUBIC)
+            f = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+            img_save_root = os.path.join(save_root, 'frames', str(idx).zfill(4)+'.png')
+            self.imwrite(f, img_save_root)
+
+        return None
+
+
+    def post_process(
+        self,
+        video_name: str,
+        comp_frames,
+        video_length,
+        out_size,
+    ) -> None:
+        """
+        Postporcess the outputs of the model.
+
+        Args:
+            TODO
+
+        """
+        # Save the frames of the video.
+        save_root = os.path.join(self.save_path, video_name)
+        if not os.path.exists(save_root):
+            os.makedirs(save_root, exist_ok=True)
+
+        if self.save_frames:
+            self.save_frame(comp_frames, video_length, out_size, save_root)
+
+        # Save the video.
+        if self.mode == 'video_outpainting':
+            comp_frames = [i[10:-10,10:-10] for i in comp_frames]
+            masked_frame_for_save = [i[10:-10,10:-10] for i in masked_frame_for_save]
+        elif self.mode == 'video_inpainting':
+            masked_frame_for_save = [cv2.resize(f, out_size) for f in masked_frame_for_save]
+            comp_frames = [cv2.resize(f, out_size) for f in comp_frames]
+        else:
+            raise NotImplementedError(f"Image mode {self.mode}")
+
+        self.save_videos_frame(save_root, masked_frame_for_save, comp_frames)
+
+        return None
 
 class Stack(object):
     def __init__(self, roll=False) -> None:
@@ -353,4 +436,3 @@ class ToTorchFormatTensor(object):
             img = img.transpose(0, 1).transpose(0, 2).contiguous()
         img = img.float().div(255) if self.div else img.float()
         return img
-
