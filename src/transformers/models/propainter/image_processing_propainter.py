@@ -94,27 +94,6 @@ class ProPainterImageProcessor(BaseImageProcessor):
     def to_tensors(self) -> torch.Tensor:
         return transforms.Compose([Stack(), ToTorchFormatTensor()])
 
-    def get_device(
-        self,
-        gpu_id : str = None
-    ) -> torch.device:
-        """
-        TODO
-        """
-        IS_HIGH_VERSION = [int(m) for m in list(re.findall(r"^([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9][a-zA-Z0-9]*)?(\+git.*)?$",\
-            torch.__version__)[0][:3])] >= [1, 12, 0]
-
-        if gpu_id is None:
-            gpu_str = ''
-        elif isinstance(gpu_id, int):
-            gpu_str = f':{gpu_id}'
-        else:
-            raise TypeError('Input should be int value.')
-
-        if IS_HIGH_VERSION:
-            if torch.backends.mps.is_available():
-                return torch.device('mps'+gpu_str)
-        return torch.device('cuda'+gpu_str if torch.cuda.is_available() and torch.backends.cudnn.is_available() else 'cpu')
 
     def resize_frames(
         self,
@@ -175,6 +154,7 @@ class ProPainterImageProcessor(BaseImageProcessor):
         mask[mask<=th] = 0
         return mask
 
+
     def read_mask(
         self,
         mpath,
@@ -224,6 +204,7 @@ class ProPainterImageProcessor(BaseImageProcessor):
 
         return flow_masks, masks_dilated
 
+
     def extrapolation(
         self,
         video_ori,
@@ -269,7 +250,8 @@ class ProPainterImageProcessor(BaseImageProcessor):
 
         return frames, flow_masks, masks_dilated, (imgW_extr, imgH_extr)
 
-    def preprocess(
+
+    def preprocess_inpainting(
         self,
         return_tensors: Optional[Union[str, TensorType]] = None,
         **kwargs,
@@ -282,7 +264,46 @@ class ProPainterImageProcessor(BaseImageProcessor):
 
         """
 
-        device = self.get_device()
+        frames, fps, size, video_name = self.read_frame_from_videos(self.video)
+        if not self.size['width'] == -1 and not self.size['height'] == -1:
+            size = (self.size['width'], self.size['height'])
+        if not self.resize_ratio == 1.0:
+            size = (int(self.resize_ratio * size[0]), int(self.resize_ratio * size[1]))
+
+        if self.do_resize:
+            frames, size, out_size = self.resize_frames(frames, size)
+
+        frames_len = len(frames)
+        flow_masks, masks_dilated = self.read_mask(self.mask, frames_len, size,
+                                            flow_mask_dilates=self.mask_dilation,
+                                            mask_dilates=self.mask_dilation)
+
+        frames = self.to_tensors()(frames).unsqueeze(0) * 2 - 1
+        flow_masks = self.to_tensors()(flow_masks).unsqueeze(0)
+        masks_dilated = self.to_tensors()(masks_dilated).unsqueeze(0)
+
+        data = {"frames": frames,
+                "flow_masks": flow_masks,
+                "distil_masks": masks_dilated}
+
+        details = {"video_name": video_name,
+                "out_size": out_size}
+
+        return BatchFeature(data=data, tensor_type=return_tensors), details
+
+
+    def preprocess_outpainting(
+        self,
+        return_tensors: Optional[Union[str, TensorType]] = None,
+        **kwargs,
+    ) -> BatchFeature:
+        """
+        Preprocess an image or batch of images.
+
+        Args:
+            TODO
+
+        """
 
         frames, fps, size, video_name = self.read_frame_from_videos(self.video)
         if not self.size['width'] == -1 and not self.size['height'] == -1:
@@ -293,23 +314,21 @@ class ProPainterImageProcessor(BaseImageProcessor):
         if self.do_resize:
             frames, size, out_size = self.resize_frames(frames, size)
 
-        if self.mode == 'video_inpainting':
-            frames_len = len(frames)
-            flow_masks, masks_dilated = self.read_mask(self.mask, frames_len, size,
-                                                flow_mask_dilates=self.mask_dilation,
-                                                mask_dilates=self.mask_dilation)
-        elif self.mode == 'video_outpainting':
-            frames, flow_masks, masks_dilated, size = self.extrapolation(frames, (self.scale_h, self.scale_w))
-        else:
-            raise NotImplementedError
+        frames, flow_masks, masks_dilated, size = self.extrapolation(frames, (self.scale_h, self.scale_w))
 
         frames = self.to_tensors()(frames).unsqueeze(0) * 2 - 1
         flow_masks = self.to_tensors()(flow_masks).unsqueeze(0)
         masks_dilated = self.to_tensors()(masks_dilated).unsqueeze(0)
-        frames, flow_masks, masks_dilated = frames.to(device), flow_masks.to(device), masks_dilated.to(device)
 
-        data = {"frames": frames, "flow_masks": flow_masks, "distil_masks": masks_dilated}
-        return BatchFeature(data=data, tensor_type=return_tensors)
+        data = {"frames": frames,
+                "flow_masks": flow_masks,
+                "distil_masks": masks_dilated}
+
+        details = {"video_name": video_name,
+                "out_size": out_size}
+
+        return BatchFeature(data=data, tensor_type=return_tensors), details
+
 
     def save_videos_frame(
         self,
@@ -327,6 +346,7 @@ class ProPainterImageProcessor(BaseImageProcessor):
         imageio.mimwrite(os.path.join(save_root, 'masked_in.mp4'), masked_frame_for_save, fps=self.save_fps, quality=7)
         imageio.mimwrite(os.path.join(save_root, 'inpaint_out.mp4'), comp_frames, fps=self.save_fps, quality=7)
         return None
+
 
     def imwrite(
         self,
