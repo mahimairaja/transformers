@@ -14,55 +14,49 @@
 # limitations under the License.
 """Image processor class for ViT."""
 
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
 
 import numpy as np
-
 import os
 import re
-import torchvision
-import torch
-from torchvision import transforms
-from PIL import Image
 import cv2
-import scipy
 
 from ...image_processing_utils import BaseImageProcessor, BatchFeature
-from ...utils import TensorType, logging
+from ...utils import (
+    TensorType,
+    is_scipy_available,
+    is_torchvision_available,
+    is_torch_available,
+    is_vision_available,
+    logging,
+)
 
+
+if is_torch_available():
+    import torch
+
+
+if is_torchvision_available():
+    import torchvision
+    from torchvision import transforms
+
+
+if is_vision_available():
+    from PIL import Image
+
+
+if is_scipy_available():
+    import scipy
 
 logger = logging.get_logger(__name__)
 
 
-class ViTImageProcessor(BaseImageProcessor):
+class ProPainterImageProcessor(BaseImageProcessor):
     r"""
-    Constructs a ViT image processor.
+    Constructs a ProPainter image processor.
 
     Args:
-        do_resize (`bool`, *optional*, defaults to `True`):
-            Whether to resize the image's (height, width) dimensions to the specified `(size["height"],
-            size["width"])`. Can be overridden by the `do_resize` parameter in the `preprocess` method.
-        size (`dict`, *optional*, defaults to `{"height": 224, "width": 224}`):
-            Size of the output image after resizing. Can be overridden by the `size` parameter in the `preprocess`
-            method.
-        resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BILINEAR`):
-            Resampling filter to use if resizing the image. Can be overridden by the `resample` parameter in the
-            `preprocess` method.
-        do_rescale (`bool`, *optional*, defaults to `True`):
-            Whether to rescale the image by the specified scale `rescale_factor`. Can be overridden by the `do_rescale`
-            parameter in the `preprocess` method.
-        rescale_factor (`int` or `float`, *optional*, defaults to `1/255`):
-            Scale factor to use if rescaling the image. Can be overridden by the `rescale_factor` parameter in the
-            `preprocess` method.
-        do_normalize (`bool`, *optional*, defaults to `True`):
-            Whether to normalize the image. Can be overridden by the `do_normalize` parameter in the `preprocess`
-            method.
-        image_mean (`float` or `List[float]`, *optional*, defaults to `IMAGENET_STANDARD_MEAN`):
-            Mean to use if normalizing the image. This is a float or list of floats the length of the number of
-            channels in the image. Can be overridden by the `image_mean` parameter in the `preprocess` method.
-        image_std (`float` or `List[float]`, *optional*, defaults to `IMAGENET_STANDARD_STD`):
-            Standard deviation to use if normalizing the image. This is a float or list of floats the length of the
-            number of channels in the image. Can be overridden by the `image_std` parameter in the `preprocess` method.
+        TODO
     """
 
     def __init__(
@@ -102,10 +96,15 @@ class ViTImageProcessor(BaseImageProcessor):
         self.do_normalize = do_normalize
 
 
-    def to_tensors(self):
+    def to_tensors(self) -> torch.Tensor:
         return transforms.Compose([Stack(), ToTorchFormatTensor()])
 
-    def get_device(gpu_id=None):
+    def get_device(self, 
+        gpu_id : str = None
+    ) -> torch.device:
+        """
+        TODO
+        """ 
         IS_HIGH_VERSION = [int(m) for m in list(re.findall(r"^([0-9]+)\.([0-9]+)\.([0-9]+)([^0-9][a-zA-Z0-9]*)?(\+git.*)?$",\
             torch.__version__)[0][:3])] >= [1, 12, 0]
 
@@ -121,7 +120,32 @@ class ViTImageProcessor(BaseImageProcessor):
                 return torch.device('mps'+gpu_str)
         return torch.device('cuda'+gpu_str if torch.cuda.is_available() and torch.backends.cudnn.is_available() else 'cpu')
 
-    def read_frame_from_videos(self, frame_root):
+    def resize_frames(self,
+        frames,
+        size=None
+    ) -> Tuple[List[Image.Image], Tuple[int, int], Tuple[int, int]]:
+        """
+        TODO
+        """ 
+        if size is not None:
+            out_size = size
+            process_size = (out_size[0]-out_size[0]%8, out_size[1]-out_size[1]%8)
+            frames = [f.resize(process_size) for f in frames]
+        else:
+            out_size = frames[0].size
+            process_size = (out_size[0]-out_size[0]%8, out_size[1]-out_size[1]%8)
+            if not out_size == process_size:
+                frames = [f.resize(process_size) for f in frames]
+
+        return frames, process_size, out_size
+
+
+    def read_frame_from_videos(self,
+        frame_root : str 
+    ) -> Tuple[List[Image.Image], Optional[float], Tuple[int, int], str]:
+        """
+        TODO
+        """ 
         if frame_root.endswith(('mp4', 'mov', 'avi', 'MP4', 'MOV', 'AVI')): # input video path
             video_name = os.path.basename(frame_root)[:-4]
             vframes, aframes, info = torchvision.io.read_video(filename=frame_root, pts_unit='sec') # RGB
@@ -141,12 +165,28 @@ class ViTImageProcessor(BaseImageProcessor):
 
         return frames, fps, size, video_name
     
-    def binary_mask(self, mask, th=0.1):
+    def binary_mask(self,
+        mask: np.ndarray,
+        th: float = 0.1
+    ) -> np.ndarray:
+        """
+        TODO
+        """ 
         mask[mask>th] = 1
         mask[mask<=th] = 0
         return mask
     
-    def read_mask(self, mpath, length, size, flow_mask_dilates=8, mask_dilates=5):
+    def read_mask(
+        self,
+        mpath,
+        length,
+        size,
+        flow_mask_dilates : int = 8,
+        mask_dilates : int = 5
+    ) -> Tuple[List[Image.Image], List[Image.Image]]:
+        """
+        TODO
+        """ 
         masks_img = []
         masks_dilated = []
         flow_masks = []
@@ -185,7 +225,10 @@ class ViTImageProcessor(BaseImageProcessor):
 
         return flow_masks, masks_dilated
 
-    def extrapolation(self, video_ori, scale):
+    def extrapolation(self,
+        video_ori,
+        scale : Tuple
+    ) -> Tuple[List[Image.Image], List[Image.Image], List[Image.Image], Tuple[int, int]]:
         """Prepares the data for video outpainting.
         """
         nFrame = len(video_ori)
@@ -230,50 +273,13 @@ class ViTImageProcessor(BaseImageProcessor):
         self,
         return_tensors: Optional[Union[str, TensorType]] = None,
         **kwargs,
-    ):
+    ) -> BatchFeature: 
         """
         Preprocess an image or batch of images.
 
         Args:
-            images (`ImageInput`):
-                Image to preprocess. Expects a single or batch of images with pixel values ranging from 0 to 255. If
-                passing in images with pixel values between 0 and 1, set `do_rescale=False`.
-            do_resize (`bool`, *optional*, defaults to `self.do_resize`):
-                Whether to resize the image.
-            size (`Dict[str, int]`, *optional*, defaults to `self.size`):
-                Dictionary in the format `{"height": h, "width": w}` specifying the size of the output image after
-                resizing.
-            resample (`PILImageResampling` filter, *optional*, defaults to `self.resample`):
-                `PILImageResampling` filter to use if resizing the image e.g. `PILImageResampling.BILINEAR`. Only has
-                an effect if `do_resize` is set to `True`.
-            do_rescale (`bool`, *optional*, defaults to `self.do_rescale`):
-                Whether to rescale the image values between [0 - 1].
-            rescale_factor (`float`, *optional*, defaults to `self.rescale_factor`):
-                Rescale factor to rescale the image by if `do_rescale` is set to `True`.
-            do_normalize (`bool`, *optional*, defaults to `self.do_normalize`):
-                Whether to normalize the image.
-            image_mean (`float` or `List[float]`, *optional*, defaults to `self.image_mean`):
-                Image mean to use if `do_normalize` is set to `True`.
-            image_std (`float` or `List[float]`, *optional*, defaults to `self.image_std`):
-                Image standard deviation to use if `do_normalize` is set to `True`.
-            return_tensors (`str` or `TensorType`, *optional*):
-                The type of tensors to return. Can be one of:
-                - Unset: Return a list of `np.ndarray`.
-                - `TensorType.TENSORFLOW` or `'tf'`: Return a batch of type `tf.Tensor`.
-                - `TensorType.PYTORCH` or `'pt'`: Return a batch of type `torch.Tensor`.
-                - `TensorType.NUMPY` or `'np'`: Return a batch of type `np.ndarray`.
-                - `TensorType.JAX` or `'jax'`: Return a batch of type `jax.numpy.ndarray`.
-            data_format (`ChannelDimension` or `str`, *optional*, defaults to `ChannelDimension.FIRST`):
-                The channel dimension format for the output image. Can be one of:
-                - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
-                - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
-                - Unset: Use the channel dimension format of the input image.
-            input_data_format (`ChannelDimension` or `str`, *optional*):
-                The channel dimension format for the input image. If unset, the channel dimension format is inferred
-                from the input image. Can be one of:
-                - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
-                - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
-                - `"none"` or `ChannelDimension.NONE`: image in (height, width) format.
+            TODO
+
         """
 
         device = self.get_device()
@@ -307,10 +313,10 @@ class ViTImageProcessor(BaseImageProcessor):
 
 
 class Stack(object):
-    def __init__(self, roll=False):
+    def __init__(self, roll=False) -> None:
         self.roll = roll
 
-    def __call__(self, img_group):
+    def __call__(self, img_group) -> np.ndarray:
         mode = img_group[0].mode
         if mode == '1':
             img_group = [img.convert('L') for img in img_group]
@@ -330,10 +336,10 @@ class Stack(object):
 class ToTorchFormatTensor(object):
     """ Converts a PIL.Image (RGB) or numpy.ndarray (H x W x C) in the range [0, 255]
     to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0] """
-    def __init__(self, div=True):
+    def __init__(self, div=True) -> None:
         self.div = div
 
-    def __call__(self, pic):
+    def __call__(self, pic) -> torch.Tensor:
         if isinstance(pic, np.ndarray):
             # numpy img: [L, C, H, W]
             img = torch.from_numpy(pic).permute(2, 3, 0, 1).contiguous()
